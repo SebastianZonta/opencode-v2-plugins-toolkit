@@ -130,10 +130,25 @@ export default Plugin.define({
     // v2 offers no draft API and the draft is skipped entirely here.
     let liveSessionID: string | null = null
 
-    async function sendText(context: any, text: string): Promise<boolean> {
-      if (!liveSessionID) return false
+    // ponytail: render-time session goes stale on new tabs — resolve the
+    // active session at send time so dictation lands in the focused chat
+    const currentSessionID = (): string | null => {
       try {
-        await (context.client as any).session.prompt({ sessionID: liveSessionID, text })
+        const r = (context.ui as any).router.current()
+        if (r?.type === "session" && r.sessionID) return r.sessionID
+      } catch {}
+      try {
+        const active = ((context.ui as any).tabs.list() ?? []).find((t: any) => t.active)
+        if (active?.sessionID) return active.sessionID
+      } catch {}
+      return liveSessionID
+    }
+
+    async function sendText(context: any, text: string): Promise<boolean> {
+      const sessionID = currentSessionID()
+      if (!sessionID) return false
+      try {
+        await (context.client as any).session.prompt({ sessionID, text })
         return true
       } catch {
         return false

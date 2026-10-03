@@ -184,6 +184,7 @@ export default Plugin.define({
       d.speakResponses = (context.options as any)?.speakResponses !== false
     })
     let liveSessionID: string | null = null
+    let tabSeen = false // audio session seen in the open-tab list at least once
     let timer: any = null
     let flushTimer: any = null
     const pending = new Map<string, string>() // sessionID -> accumulated response text
@@ -305,6 +306,7 @@ export default Plugin.define({
       if (epoch !== setupEpoch) return // stale setup: never touch audio
       stopAudio() // interrupt: latest response wins, never a queue
       audioSessionID = sessionID
+      tabSeen = false
       const myGen = generation
       updateState((d: any) => {
         d.phase = "speaking"
@@ -312,6 +314,19 @@ export default Plugin.define({
       })
       stopTimer()
       timer = setInterval(() => {
+        // no tab-close event exists on the bus: a tab closed mid-playback
+        // vanishes from the open-tab list, and that silences its audio
+        try {
+          if (audioSessionID && context.ui.tabs.enabled()) {
+            if (context.ui.tabs.list().some((t) => t.sessionID === audioSessionID)) {
+              tabSeen = true
+            } else if (tabSeen) {
+              stopAudio()
+              reset()
+              return
+            }
+          }
+        } catch { /* tabs API unavailable: keep playing */ }
         updateState((d: any) => {
           d.elapsed = (d.elapsed ?? 0) + 1
         })
@@ -423,9 +438,9 @@ export default Plugin.define({
         stopAudio()
         reset()
       }
-      data.on("session.tab.close", stopSession)
       data.on("session.deleted", stopSession)
-      data.on("session.closed", stopSession)
+      // NOTE: session.tab.close and session.closed do not exist on the
+      // bus — closed tabs are caught by the speaking-timer tab check above.
       // hitting enter (a new execution starts) silences current audio:
       // otherwise stale speech keeps playing over the user's next turn
       data.on("session.execution.started", (e: any) => {
