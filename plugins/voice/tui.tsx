@@ -131,27 +131,40 @@ export default Plugin.define({
     let liveSessionID: string | null = null
 
     // ponytail: render-time session goes stale on new tabs — resolve the
-    // active session at send time so dictation lands in the focused chat
+    // active session at send time so dictation lands in the focused chat.
+    // Tabs first: the active tab IS the focused chat. Router second.
+    // Render-time id is the last resort, and may be stale.
     const currentSessionID = (): string | null => {
+      try {
+        const tabs = (context.ui as any).tabs
+        if (tabs?.enabled?.()) {
+          const active = (tabs.list() ?? []).find((t: any) => t.active)
+          if (active?.sessionID) return active.sessionID
+        }
+      } catch {}
       try {
         const r = (context.ui as any).router.current()
         if (r?.type === "session" && r.sessionID) return r.sessionID
       } catch {}
-      try {
-        const active = ((context.ui as any).tabs.list() ?? []).find((t: any) => t.active)
-        if (active?.sessionID) return active.sessionID
-      } catch {}
       return liveSessionID
     }
 
-    async function sendText(context: any, text: string): Promise<boolean> {
+    const sessionLabel = (sessionID: string): string => {
+      try {
+        return (context.data as any).session.get(sessionID)?.title ?? sessionID.slice(-6)
+      } catch {
+        return sessionID.slice(-6)
+      }
+    }
+
+    async function sendText(context: any, text: string): Promise<string | null> {
       const sessionID = currentSessionID()
-      if (!sessionID) return false
+      if (!sessionID) return null
       try {
         await (context.client as any).session.prompt({ sessionID, text })
-        return true
+        return sessionID
       } catch {
-        return false
+        return null
       }
     }
 
@@ -189,8 +202,9 @@ export default Plugin.define({
         // EXP auto-send: submit the text straight into the live session,
         // skipping the draft middleman (v2 has no draft-write API anyway).
         // Falls back to draft insert + submit dispatch when direct send fails.
-        if (await sendText(context, final)) {
-          toast(polished ? "Polished and sent" : "Sent", "info")
+        const sentID = await sendText(context, final)
+        if (sentID) {
+          toast(polished ? `Polished and sent → ${sessionLabel(sentID)}` : `Sent → ${sessionLabel(sentID)}`, "info")
           return
         }
         const result = await appendDraft(context, final)
