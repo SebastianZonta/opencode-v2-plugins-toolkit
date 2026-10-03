@@ -1,39 +1,30 @@
 # jev
 
-Expone a Jev (TypeSafe System One) como tool `jev_ask` para cualquier modelo de OpenCode: decisiones calibradas con tipos, sin generar texto.
+A decision-gate tool for agents: route judgments through Jev, generate text yourself.
 
-## Por qué existe
+## What it does
 
-Los LLMs generan texto; juzgar no es su fuerte. Jev es lo opuesto: solo decide (Choice/Score/Noul con probabilidades), no escribe ni llama tools. Este plugin le da al modelo un juez externo para routing, scoring y guardrails, y le enseña cuándo usarlo mediante una línea en el system prompt.
+Exposes `jev_ask` to the agent — one question per judgment (choice, score, or noul), small explicit state, confidence threshold. Proceed at 0.8 or above, else re-check or ask the human.
 
-## Cómo funciona
+## Transports
 
-- **Tool `jev_ask`**: recibe `state` (texto u objeto) + `questions` (mapa `{id: {type: 'choice'|'score'|'noul', ...}}`), opcionalmente `model`. Devuelve las respuestas tipadas con probabilidades. Estados chicos: estados grandes degradan precisión y revientan límites de contexto.
-- **Regla de uso** (inyectada vía `session.hook("context")`): rutear juicios por `jev_ask`, generar el texto uno mismo, verificar números uno mismo. Una pregunta por juicio. Avanzar con confianza ≥ 0.8, si no re-chequear o preguntar al usuario.
+- **Zen**: `jev-1.13-free`, no key needed.
+- **Direct**: paid models with an API key.
 
-## Transportes y configuración
+`buildRequest` is exported so other plugins and skills can construct calls.
 
-En `opencode.json`:
+## Why
 
-```jsonc
-{ "package": "/home/<vos>/.config/opencode/plugins/jev",
-  "options": {
-    "baseURL": "https://api.typesafe.ai",  // default: https://opencode.ai/zen/v1
-    "apiKey": "<clave>",                   // solo modelos pagos; el free no pide
-    "model": "jev-1.13-free"               // default
-  } }
-```
+Free-form "what do you think?" prompts to a model produce confident prose, not calibrated decisions. A fixed gate with a numeric threshold turns vague judgment calls into auditable pass/fail points.
 
-- **zen** (default): `OPENCODE_ZEN_API_KEY` contra `https://opencode.ai/zen`.
-- **directo**: clave TypeSafe contra `https://api.typesafe.ai`.
-
-El tier gratuito (`jev-1.13-free`) no necesita clave; los pagos dan 401 sin ella.
-
-## Instalación
+## Install
 
 ```sh
-mkdir -p ~/.config/opencode/plugins/jev
-cp index.ts ~/.config/opencode/plugins/jev/
+cp -r plugins/jev ~/.config/opencode/plugins/   # global
 ```
 
-La función `buildRequest` está exportada para testear el armado del request sin red.
+Restart OpenCode. No configuration for the free tier.
+
+## Notes
+
+- Numbers and facts are still verified by executed code, never by the gate. Jev judges; evidence decides.

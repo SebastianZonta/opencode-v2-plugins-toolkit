@@ -1,26 +1,23 @@
 # what-changed
 
-Comando `/what-changed`: resume en inglés qué cambió en la versión instalada de OpenCode v2, corto y agrupado.
+One command that answers "what changed since X?".
 
-## Por qué existe
+## What it does
 
-Las versiones de OpenCode salen seguido y el tag suele ser solo un bump sin notas. Este comando hace el trabajo mecánico: detecta la versión, busca las notas, y si el tag está vacío compara los commits reales entre versiones y los resume.
+A single-file `/what-changed` command: point it at a commit, branch, tag, or merge-base and get a review of everything since, along two axes — Standards (does the code follow the repo's documented conventions?) and Spec (does it match what the originating issue or spec asked for?).
 
-## Cómo funciona
+## Why
 
-Registra el comando `what-changed`, que inyecta un prompt con el procedimiento:
+Diffs are easy to produce and hard to review. A fixed two-axis format keeps change reviews consistent whether the range is a work-in-progress branch or a release.
 
-1. `opencode --version` para la versión instalada.
-2. Notas del tag (`github.com/anomalyco/opencode/releases/tag/v<versión>`) y changelog (`opencode.ai/changelog`).
-3. Si el tag está vacío, API de compare `v<prev>...v<curr>` (tags v2 `v2.0.x`) y resumen de sus mensajes.
-4. Respuesta en inglés, concisa: fecha del tag, aviso si el bump venía vacío, lista de Feats/Fixes principales con PR cuando hay, links al tag y al compare al final.
-
-El plugin no hace la búsqueda él mismo: delega en el agente con la receta exacta. Sin dependencias salvo red.
-
-## Instalación
-
-Es un plugin de un solo archivo. Copialo a la carpeta global y reiniciá:
+## Install
 
 ```sh
-cp what-changed.ts ~/.config/opencode/plugins/
+cp -r plugins/what-changed ~/.config/opencode/plugins/   # global
 ```
+
+Restart OpenCode, then `/what-changed <since>`.
+
+## Notes
+
+- Single file on purpose. If it ever needs a second file, something went wrong (see ponytail-v2).

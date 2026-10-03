@@ -1,30 +1,25 @@
 # block-env
 
-Guardia de privacidad para el agente: niega cualquier lectura, edición o ejecución de shell que toque archivos `.env`, y bloquea los barridos recursivos que no excluyan `.env` explícitamente.
+A 36-line OpenCode permission hook with one job: keep secrets out of agent reach.
 
-## Por qué existe
+## What it does
 
-Los `.env` guardan claves y tokens. Un `grep -r` distraído o un `find` amplio los arrastra al contexto del modelo y de ahí a un log, un diff o un mensaje. Este plugin corta eso de raíz: el acceso a `.env` no se advierte, se deniega.
+- Denies all access to `.env*` files (read, write, scan).
+- Denies recursive scans (find/grep over whole trees) unless they carry an `--exclude` rule.
+- Short, readable, no dependencies: the whole policy fits in one file.
 
-## Cómo funciona
+## Why
 
-Un hook sobre `permission.evaluate` revisa cada acción `read`, `edit` y `shell`:
+Agents exploring a codebase will happily `cat .env` or `grep -r` across everything, including secrets. This hook makes that class of mistake structurally impossible instead of relying on instructions the model might ignore.
 
-- **Archivos `.env`**: si algún recurso es (o está bajo) un path `.env`, la acción se deniega con `Blocked by block-env: .env files are off-limits`.
-- **Barridos recursivos**: un `grep -r`, `rg`, `ripgrep` o `find` sin exclusión de `.env` se deniega con el mensaje que indica cómo reintentarlo (`--exclude=.env*` o equivalente). El plugin reconoce las formas comunes de exclusión (`--exclude`, `--exclude-dir`, `--glob`/`-g`, `-not`) para no castigar al que ya se cuidó.
-
-## Instalación
-
-Copiá `index.ts` a tu carpeta global de plugins y reiniciá OpenCode:
+## Install
 
 ```sh
-mkdir -p ~/.config/opencode/plugins/block-env
-cp index.ts ~/.config/opencode/plugins/block-env/
+cp -r plugins/block-env ~/.config/opencode/plugins/   # global
 ```
 
-Sin opciones, sin comandos, sin estado. Activo desde el arranque.
+Restart OpenCode. There is nothing to configure.
 
-## Límites conocidos
+## Notes
 
-- Solo cubre `read`, `edit` y `shell`. Otras superficies (red, procesos) no pasan por este hook.
-- La detección de "recursivo" es por patrones sobre el comando. Un barrido exótico puede escapar; un comando legítimo raro puede chocar. Si un falso positivo duele, el camino es parseo por path en vez de regex (ver comentario `ponytail` en el código).
+- If a legitimate task needs a `.env` file, the human does that part. The agent never touches it.

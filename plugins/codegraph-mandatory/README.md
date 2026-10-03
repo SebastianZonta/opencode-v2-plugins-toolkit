@@ -1,29 +1,23 @@
 # codegraph-mandatory
 
-Inyecta en cada request del agente la regla de búsqueda codegraph-first: ante código, primero el grafo, después las herramientas comunes.
+Makes codegraph-first code search a rule the agent cannot forget.
 
-## Por qué existe
+## What it does
 
-Explorar código con grep a ciegas quema contexto y pierde relaciones (quién llama a quién, impacto de un cambio). Codegraph ya indexa el proyecto; este plugin se asegura de que el agente lo use primero, siempre, sin depender de que el modelo se acuerde.
+Injects the codegraph-first instruction through OpenCode's context and compaction hooks, so every session — including after context compaction — resolves file and symbol lookup through the local codegraph index before falling back to grep/glob.
 
-## Cómo funciona
+## Why
 
-Dos hooks de sesión sobre `context` (y `compaction` cuando el host lo expone):
+"Search with codegraph first" as a chat instruction evaporates the moment context compacts. As a hook it persists: the rule is re-injected automatically, every session, no discipline required.
 
-- Agrega el system prompt `CODEGRAPH MODE ACTIVE` a cada request del loop, con dedup (si ya está, no duplica).
-- Sobrevive a la compactación: reinyecta la regla en los resúmenes para que el modo no se pierda a mitad de sesión.
-
-La regla ordena: `codegraph_explore` primero para qué/cómo/dónde y antes de editar; herramientas comunes solo cuando codegraph no cubre (proyecto sin índice, configs, docs, índice viejo).
-
-## Instalación
+## Install
 
 ```sh
-mkdir -p ~/.config/opencode/plugins/codegraph-mandatory
-cp index.ts ~/.config/opencode/plugins/codegraph-mandatory/
+cp -r plugins/codegraph-mandatory ~/.config/opencode/plugins/   # global
 ```
 
-Requiere el servidor MCP `codegraph` configurado (`codegraph serve --mcp`). Sin opciones ni comandos.
+Restart OpenCode. Requires a codegraph index in the projects you work in (`codegraph init`); without one the plugin's rule simply has nothing to query and normal search applies.
 
-## Desinstalación limpia
+## Notes
 
-El `setup` devuelve dispose que libera los hooks. Sacar la carpeta y reiniciar alcanza.
+- This plugin states a search policy. It does not bundle codegraph itself.

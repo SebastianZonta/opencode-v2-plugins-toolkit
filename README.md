@@ -1,27 +1,40 @@
 # opencode-v2-plugins-toolkit
 
-Mis plugins caseros para OpenCode v2, todos juntos. Nada third-party: cada uno nació de una necesidad concreta y vive acá con su README propio.
+A personal toolkit of homegrown [OpenCode](https://opencode.ai) v2 plugins: agent guardrails, local tooling, and on-device voice I/O. Everything here is built for daily use, not third-party code.
 
-## Los plugins
+## Plugins
 
-| Plugin | De qué trata |
-|---|---|
-| [block-env](plugins/block-env/) | Niega acceso a `.env` y frena barridos recursivos que no los excluyan. Privacidad por defecto. |
-| [codegraph-mandatory](plugins/codegraph-mandatory/) | Obliga al agente a buscar código por el grafo primero, siempre. Menos grep ciego, más relaciones. |
-| [jev](plugins/jev/) | Juez externo de decisiones (Choice/Score/Noul) como tool. El modelo genera, Jev juzga. |
-| [ponytail-v2](plugins/ponytail-v2/) | El desarrollador perezoso: YAGNI, reutilizar, stdlib primero. Con niveles y skills. |
-| [what-changed](plugins/what-changed/) | `/what-changed`: qué trajo la versión instalada, aunque el tag venga vacío. |
-| [voice](plugins/voice/) | Dictado push-to-talk en español con Whistle, todo on-device. [(README en inglés)](plugins/voice/README.md) |
-| [text-to-voice](plugins/text-to-voice/) | Las respuestas suenan por tus parlantes con Kokoro, español e inglés. [(README en inglés)](plugins/text-to-voice/README.md) |
+| Plugin | What it does |
+| ------ | ------------ |
+| [block-env](./plugins/block-env/) | Permission hook that denies `.env*` access and recursive scans without an exclude rule |
+| [codegraph-mandatory](./plugins/codegraph-mandatory/) | Injects the codegraph-first code search rule via context and compaction hooks |
+| [jev](./plugins/jev/) | `jev_ask` decision-gate tool (Zen and direct transports) for model judgments |
+| [ponytail-v2](./plugins/ponytail-v2/) | Native v2 wrapper for the Ponytail lazy-developer philosophy (`/ponytail`, modes off/lite/full/ultra) |
+| [what-changed](./plugins/what-changed/) | Single-file `/what-changed` command: what changed since a fixed point |
+| [voice](./plugins/voice/) | On-device Spanish dictation via Whistle (press to talk, text lands in the composer) |
+| [text-to-voice](./plugins/text-to-voice/) | On-device bilingual TTS via Kokoro (Spanish + English), speaks every reply |
 
-Cada carpeta tiene su README con instalación, uso y configuración en detalle.
+Each plugin folder has its own README with install and usage details.
 
-## Instalación (idea general)
+## Install
 
-- Los cinco primeros son **globales**: copiá cada carpeta (o el `.ts` en el caso de what-changed) a `~/.config/opencode/plugins/` y reiniciá OpenCode.
-- `voice` y `text-to-voice` son **por proyecto**: copiá la carpeta a `<tu-proyecto>/.opencode/plugins/` y declará el paquete en tu `opencode.json`. Piden dependencias de audio y modelos (todo on-device, ver sus READMEs).
+Two scopes, same mechanism. Copy the plugin folder you want:
 
-## Notas
+**A. Global** — available in every project:
 
-- Todo corre local salvo lo que cada README marque como red (compare API de GitHub en what-changed, transporte Zen/directo en jev, modelo de polish en voice).
-- OpenCode v2, Linux. Probado en el día a día, no en laboratorio.
+```sh
+cp -r plugins/<name> ~/.config/opencode/plugins/
+```
+
+**B. Project-local** — this checkout only, loaded from the project directory:
+
+```sh
+cp -r plugins/<name> <your-project>/.opencode/plugins/
+```
+
+Then restart OpenCode so the new plugin loads. No build step, no registry.
+
+## Notes
+
+- Voice plugins (`voice`, `text-to-voice`) need system dependencies (audio tools, model runtimes). See their READMEs.
+- Everything runs locally. No API keys, no cloud calls.
