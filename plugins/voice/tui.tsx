@@ -66,6 +66,10 @@ export default Plugin.define({
         d.elapsed = 0
       })
     }
+    // ponytail: memory storage survives plugin reloads/remounts while the
+    // capture proc and timer do not — a stale rec/busy/polish freezes the
+    // indicator (timer dead, settled=true blocks stop) so clear it on mount.
+    if ((state as any).phase !== "idle") reset()
 
     const stopCapture = () => {
       try {
@@ -129,6 +133,11 @@ export default Plugin.define({
     // EXP auto-send: live session id tracked from the slot input, since
     // v2 offers no draft API and the draft is skipped entirely here.
     let liveSessionID: string | null = null
+    // ponytail: keypress-time owner of the in-flight dictation. Resolving at
+    // send time lands in whatever tab is focused after seconds of
+    // transcribe+polish (user switched, router moved, slot re-rendered) —
+    // the text belongs to the chat where recording started.
+    let targetSessionID: string | null = null
 
     // ponytail: render-time session goes stale on new tabs — resolve the
     // active session at send time so dictation lands in the focused chat.
@@ -158,7 +167,8 @@ export default Plugin.define({
     }
 
     async function sendText(context: any, text: string): Promise<string | null> {
-      const sessionID = currentSessionID()
+      // ponytail: keypress-time capture wins; live resolve is fallback only.
+      const sessionID = targetSessionID ?? currentSessionID()
       if (!sessionID) return null
       try {
         await (context.client as any).session.prompt({ sessionID, text })
@@ -212,6 +222,7 @@ export default Plugin.define({
         else if (result === "clipboard") toast("Pasted via clipboard — press ctrl+v if empty", "info")
         else if (result === "failed") toast("Could not insert into draft — text discarded")
       } finally {
+        targetSessionID = null
         reset()
       }
     }
@@ -229,6 +240,9 @@ export default Plugin.define({
         return
       }
       clipPath = newClipPath()
+      // ponytail: snapshot synchronously with the keypress — everything after
+      // this (record seconds, transcribe, agent polish) resolves too late.
+      targetSessionID = currentSessionID()
       try {
         captureProc = Bun.spawn(["python3", VOICE, "record", clipPath, String(MAX_SECONDS)], {
           stdout: "ignore",
@@ -236,6 +250,7 @@ export default Plugin.define({
         })
       } catch {
         clipPath = null
+        targetSessionID = null
         reset()
         toast("Could not start recorder — draft untouched")
         return
@@ -255,7 +270,12 @@ export default Plugin.define({
       }, 1000)
       captureProc.exited.then(async (code: number) => {
         if ((state as any).phase !== "rec" || !claimCycle()) return
-        const err = await new Response(captureProc.stderr).text().catch(() => "")
+        const proc = captureProc
+        if (!proc) {
+          reset()
+          return
+        }
+        const err = await new Response(proc.stderr).text().catch(() => "")
         stopCapture()
         reset()
         toast(err.trim() || `Recorder exited (${code}) — draft untouched`)
@@ -276,6 +296,7 @@ export default Plugin.define({
       stopCapture()
       if (clipPath) await Bun.$`rm -f ${clipPath}`.quiet().catch(() => {})
       clipPath = null
+      targetSessionID = null
       reset()
       toast("Recording discarded — draft untouched", "info")
     }
@@ -364,6 +385,15 @@ export default Plugin.define({
     return () => {
       stopTimer()
       stopCapture()
+      // ponytail: proc+timer die with this closure but memory state persists —
+      // reset so a remount never rehydrates a dead REC indicator.
+      const clip = clipPath
+      clipPath = null
+      targetSessionID = null
+      if (clip) void Bun.$`rm -f ${clip}`.quiet().catch(() => {})
+      try {
+        reset()
+      } catch {}
     }
   },
 })

@@ -98,3 +98,8 @@ With a mic: `arecord -d 3 -f S16_LE -r16000 -c1 /tmp/clip.wav`, then
 - [ ] Every README claim re-checked against `tui.tsx`/`voice.py`
       (indicator strings, keymap binds, exit codes, Polish behavior)
 - [ ] Root `README.md` re-mirrored from the plugin README
+
+## Sources
+
+- [cactus-needle on PyPI](https://pypi.org/project/cactus-needle/)
+- [Whistle: Speech to Text in 16.9 MB (Cactus)](https://cactuscompute.com/blog/whistle)
