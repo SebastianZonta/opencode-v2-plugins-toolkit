@@ -156,24 +156,83 @@ export default Plugin.define({
     // transcribe+polish (user switched, router moved, slot re-rendered) —
     // the text belongs to the chat where recording started.
     let targetSessionID: string | null = null
+    let targetConfident = false
 
-    // ponytail: render-time session goes stale on new tabs — resolve the
-    // active session at send time so dictation lands in the focused chat.
-    // Tabs first: the active tab IS the focused chat. Router second.
-    // Render-time id is the last resort, and may be stale.
-    const currentSessionID = (): string | null => {
+    // ponytail: host shapes vary across versions (sessionID/sessionId/id,
+    // nested data/params) — accept all of them so a new chat never falls
+    // back to a stale id.
+    const pickID = (o: any): string | null => {
+      if (!o || typeof o !== "object") return null
+      const v =
+        o.sessionID ?? o.sessionId ?? o.session_id ?? o.data?.sessionID ?? o.data?.sessionId ?? o.params?.sessionID ?? null
+      return typeof v === "string" && v ? v : null
+    }
+
+    // ponytail: a guessed session id is how text lands in the wrong chat.
+    // Only auto-send when two independent sources agree on the id; the
+    // caller falls back to draft/paste (focused chat = correct chat) when
+    // they disagree. The newest-session guess is gone on purpose.
+    const freshSessionID = (): { tabs: string | null; router: string | null } => {
+      let tabs: string | null = null
       try {
-        const tabs = (context.ui as any).tabs
-        if (tabs?.enabled?.()) {
-          const active = (tabs.list() ?? []).find((t: any) => t.active)
-          if (active?.sessionID) return active.sessionID
+        const t = (context.ui as any).tabs
+        if (t?.enabled?.()) {
+          const list = t.list() ?? []
+          const active = list.find((x: any) => x.active ?? x.focused ?? x.selected) ?? null
+          tabs = pickID(active) ?? (typeof active === "string" ? active : null)
         }
       } catch {}
+      let router: string | null = null
       try {
         const r = (context.ui as any).router.current()
-        if (r?.type === "session" && r.sessionID) return r.sessionID
+        router = pickID(r) ?? pickID(r?.data) ?? pickID(r?.params)
+        if (!router && r && typeof r.id === "string" && (r.type === "session" || r.route === "session" || r.name === "session"))
+          router = r.id
       } catch {}
-      return liveSessionID
+      return { tabs, router }
+    }
+
+    const resolveSession = (): { id: string | null; confident: boolean } => {
+      const { tabs, router } = freshSessionID()
+      if (tabs && router && tabs === router) return { id: tabs, confident: true }
+      if (tabs && tabs === liveSessionID) return { id: tabs, confident: true }
+      if (router && router === liveSessionID) return { id: router, confident: true }
+      return { id: tabs ?? router ?? liveSessionID, confident: false }
+    }
+
+    // ponytail: temporary debug flag — set debugVoice:true in plugin options,
+    // restart, reproduce, report the toasts. Remove once diagnosed.
+    const DEBUG = (context.options as any)?.debugVoice === true
+    const short = (id: string | null) => (id ? id.slice(-6) : "-")
+    // ponytail: file log beats toasts (transient) — read it directly after repro.
+    const dbgLines: string[] = []
+    const dbgLog = async (line: string) => {
+      if (!DEBUG) return
+      try {
+        dbgLines.push(new Date().toISOString() + " " + line)
+        while (dbgLines.length > 50) dbgLines.shift()
+        await Bun.write(`${process.env.TMPDIR ?? "/tmp"}/opencode-voice-debug.log`, dbgLines.join("\n") + "\n")
+      } catch {}
+    }
+    const dbgSources = (): string => {
+      let tabs = "-"
+      try {
+        const t = (context.ui as any).tabs
+        if (t?.enabled?.()) {
+          const l = t.list() ?? []
+          tabs = l.map((x: any) => `${String(x.sessionID ?? "?").slice(-4)}${x.active ? "*" : ""}`).join(",") || "empty"
+        } else tabs = "off"
+      } catch {
+        tabs = "err"
+      }
+      let router = "-"
+      try {
+        const r = (context.ui as any).router.current()
+        router = r?.type === "session" ? String(r.sessionID).slice(-6) : (r?.type ?? "?")
+      } catch {
+        router = "err"
+      }
+      return `tabs:${tabs} router:${router} live:${short(liveSessionID)}`
     }
 
     const sessionLabel = (sessionID: string): string => {
@@ -185,9 +244,11 @@ export default Plugin.define({
     }
 
     async function sendText(context: any, text: string): Promise<string | null> {
-      // ponytail: keypress-time capture wins; live resolve is fallback only.
-      const sessionID = targetSessionID ?? currentSessionID()
-      if (!sessionID) return null
+      // ponytail: only a confident id may auto-send; anything else falls
+      // back to draft/paste in the focused chat (never a guessed session).
+      void dbgLog(`send target:${short(targetSessionID)} conf:${targetConfident ? 1 : 0} fresh:${dbgSources()}`)
+      if (!targetSessionID || !targetConfident) return null
+      const sessionID = targetSessionID
       try {
         await (context.client as any).session.prompt({ sessionID, text })
         return sessionID
@@ -255,13 +316,26 @@ export default Plugin.define({
       if (s.phase === "rec") {
         if (!claimCycle()) return
         stopCapture()
+        // ponytail: stop keypress is fresher than start — it wins only when
+        // confident; otherwise the start snap stands.
+        const stopRes = resolveSession()
+        if (stopRes.confident) {
+          targetSessionID = stopRes.id
+          targetConfident = true
+        }
+        if (DEBUG) toast(`voice stop ${dbgSources()} target:${short(targetSessionID)} conf:${targetConfident ? 1 : 0}`, "info")
+        void dbgLog(`stop ${dbgSources()} target:${short(targetSessionID)} conf:${targetConfident ? 1 : 0}`)
         await transcribeAndInsert()
         return
       }
       clipPath = newClipPath()
       // ponytail: snapshot synchronously with the keypress — everything after
       // this (record seconds, transcribe, agent polish) resolves too late.
-      targetSessionID = currentSessionID()
+      const startRes = resolveSession()
+      targetSessionID = startRes.id
+      targetConfident = startRes.confident
+      if (DEBUG) toast(`voice start ${dbgSources()} target:${short(targetSessionID)} conf:${targetConfident ? 1 : 0}`, "info")
+      void dbgLog(`start ${dbgSources()} target:${short(targetSessionID)} conf:${targetConfident ? 1 : 0}`)
       try {
         captureProc = Bun.spawn(["python3", VOICE, "record", clipPath, String(MAX_SECONDS)], {
           stdout: "ignore",
@@ -369,7 +443,8 @@ export default Plugin.define({
     context.ui.slot({
       append: "prompt.footer.status",
       render: (slot: any) => {
-        liveSessionID = slot?.sessionID ?? liveSessionID
+        const sid = pickID(slot)
+        if (sid) liveSessionID = sid
         registerKeymap()
         return <Mic />
       },
@@ -387,9 +462,9 @@ export default Plugin.define({
             fallback={
               <Show
                 when={(s.phase as string) === "polish"}
-                fallback={<text>…transcribing{".".repeat(1 + ((s.tick ?? 0) % 3))}</text>}
+                fallback={<text>…transcribing{".".repeat(1 + ((s.tick ?? 0) % 3))}{" ".repeat(2 - ((s.tick ?? 0) % 3))}</text>}
               >
-                <text>polishing with agent{".".repeat(1 + ((s.tick ?? 0) % 3))}</text>
+                <text>polishing with agent{".".repeat(1 + ((s.tick ?? 0) % 3))}{" ".repeat(2 - ((s.tick ?? 0) % 3))}</text>
               </Show>
             }
           >
