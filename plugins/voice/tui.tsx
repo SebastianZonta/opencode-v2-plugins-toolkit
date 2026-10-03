@@ -36,7 +36,7 @@ export default Plugin.define({
   id: "voice.cli",
   setup(context) {
     const [state, updateState] = context.storage.memory("voice", {
-      initial: { phase: "idle" as "idle" | "rec" | "busy" | "polish", elapsed: 0 },
+      initial: { phase: "idle" as "idle" | "rec" | "busy" | "polish", elapsed: 0, tick: 0 },
     })
     // Polish setting: plugin options win on every (re)load; the toggle
     // only overrides at runtime until the next restart.
@@ -59,11 +59,29 @@ export default Plugin.define({
       timer = null
     }
 
+    // ponytail: busy/polish animation needs its own fast ticker. The 1s REC
+    // timer is capped at MAX_SECONDS, so sharing it freezes the dots.
+    let anim: any = null
+    const stopAnim = () => {
+      if (anim) clearInterval(anim)
+      anim = null
+    }
+    const startAnim = () => {
+      stopAnim()
+      anim = setInterval(() => {
+        updateState((d: any) => {
+          d.tick = ((d.tick ?? 0) + 1) % 40
+        })
+      }, 250)
+    }
+
     const reset = () => {
       stopTimer()
+      stopAnim()
       updateState((d: any) => {
         d.phase = "idle"
         d.elapsed = 0
+        d.tick = 0
       })
     }
     // ponytail: memory storage survives plugin reloads/remounts while the
@@ -184,6 +202,7 @@ export default Plugin.define({
       updateState((d: any) => {
         d.phase = "busy"
       })
+      startAnim()
       try {
         const p = Bun.spawn(["python3", VOICE, "transcribe", clip!], {
           stdout: "pipe",
@@ -368,9 +387,9 @@ export default Plugin.define({
             fallback={
               <Show
                 when={(s.phase as string) === "polish"}
-                fallback={<text>…transcribing (first run downloads model)</text>}
+                fallback={<text>…transcribing{".".repeat(1 + ((s.tick ?? 0) % 3))}</text>}
               >
-                <text>polishing with agent{".".repeat(1 + (s.elapsed % 3))}{" ".repeat(2 - (s.elapsed % 3))}</text>
+                <text>polishing with agent{".".repeat(1 + ((s.tick ?? 0) % 3))}</text>
               </Show>
             }
           >
