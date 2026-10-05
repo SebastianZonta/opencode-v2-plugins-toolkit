@@ -1,4 +1,5 @@
 import { Plugin } from "@opencode/plugin/tui"
+import { readFileSync, writeFileSync } from "node:fs"
 import { Show } from "solid-js"
 
 const TTS = decodeURIComponent(new URL("./tts.py", import.meta.url).pathname)
@@ -26,6 +27,52 @@ const synthWaiters = new Map<number, { resolve: (r: any) => void; reject: (e: an
 let soloQueue: Promise<void> = Promise.resolve()
 let toggling = false
 let audioSessionID: string | null = null // session whose reply is currently speaking
+
+// ponytail: the module can load N times per process (plugin hot-reload),
+// and module state is per-instance — epoch/generation guards can't silence
+// rival instances, which is heard as simultaneous audios. Leadership lives
+// in tiny /tmp files (the only memory all instances share): only the newest
+// setup speaks. Scoped per user+project so other checkouts are unaffected.
+// Fail-open on missing files: never total-mute over a deleted tmp file.
+const TTS_UID = (() => {
+  try {
+    return String((process as any).getuid?.() ?? process.env.USER ?? "u")
+  } catch {
+    return "u"
+  }
+})()
+let ttsScope = "shared"
+const ttsPaths = () => {
+  const base = `${process.env.TMPDIR ?? "/tmp"}/opencode-tts-${TTS_UID}-${ttsScope}`
+  return { leader: `${base}.leader`, daemonPid: `${base}.daemon.pid` }
+}
+const readTiny = (p: string): string | null => {
+  try {
+    return readFileSync(p, "utf8").trim() || null
+  } catch {
+    return null
+  }
+}
+const writeTiny = (p: string, v: string) => {
+  try {
+    writeFileSync(p, v)
+  } catch {}
+}
+// pid-reuse safe: only SIGKILL a live process whose cmdline is our daemon
+const isOurDaemonPid = (pid: number): boolean => {
+  try {
+    return readFileSync(`/proc/${pid}/cmdline`, "utf8").replace(/\0/g, " ").includes("ttsd.py")
+  } catch {
+    return false
+  }
+}
+const killPid = (pid: number) => {
+  if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) return
+  if (!isOurDaemonPid(pid)) return
+  try {
+    process.kill(pid, "SIGKILL")
+  } catch {}
+}
 
 // ponytail: Bun kill can silently miss (lost handle = orphaned synth at
 // 120% CPU), so kill by pid first, then the Bun handle as fallback
@@ -126,6 +173,9 @@ function runDaemon(): void {
     return
   }
   daemonProc = proc
+  try {
+    writeTiny(ttsPaths().daemonPid, String(proc.pid))
+  } catch {}
   void pumpDaemon(proc)
   proc.exited.then(() => {
     if (daemonProc === proc) killDaemon() // rejects waiters; next speak respawns
@@ -189,6 +239,28 @@ export default Plugin.define({
     let flushTimer: any = null
     const pending = new Map<string, string>() // sessionID -> accumulated response text
     const epoch = ++setupEpoch // stale setups keep listeners but never speak
+    // newest setup across ALL module instances leads — older ones go silent
+    try {
+      const loc: any = (context as any)?.location ?? {}
+      const dir = String(loc?.directory ?? loc?.project?.directory ?? loc?.project?.canonical ?? "shared")
+      let h = 5381
+      for (let i = 0; i < dir.length; i++) h = ((h << 5) + h + dir.charCodeAt(i)) | 0
+      ttsScope = `p${(h >>> 0).toString(36)}`
+    } catch {
+      ttsScope = "shared"
+    }
+    const myLeadership = `${process.pid}:${epoch}:${Math.random().toString(36).slice(2)}`
+    const paths = ttsPaths()
+    writeTiny(paths.leader, myLeadership)
+    const iAmLeader = () => {
+      const cur = readTiny(paths.leader)
+      return cur === null || cur === myLeadership
+    }
+    // superseded daemon (rival instance's) frees ~2GB; pid-reuse safe
+    try {
+      const old = Number(readTiny(paths.daemonPid))
+      if (Number.isInteger(old) && old > 0) killPid(old)
+    } catch {}
     ttsOn = (context.options as any)?.speakResponses !== false
 
     const toast = (message: string, variant: "error" | "info" = "error") =>
@@ -304,6 +376,7 @@ export default Plugin.define({
 
     async function speak(text: string, sessionID: string) {
       if (epoch !== setupEpoch) return // stale setup: never touch audio
+      if (!iAmLeader()) return // rival instance took over: stay silent
       stopAudio() // interrupt: latest response wins, never a queue
       audioSessionID = sessionID
       tabSeen = false
@@ -346,7 +419,7 @@ export default Plugin.define({
           upcoming = null
         }
         for (let i = 0; i < chunks.length; i++) {
-          if (myGen !== generation) {
+          if (myGen !== generation || !iAmLeader()) {
             dropPrefetch()
             return // superseded: stay silent
           }
@@ -411,6 +484,10 @@ export default Plugin.define({
         clearTimeout(flushTimer)
         flushTimer = setTimeout(() => {
           if (epoch !== setupEpoch) return // stale setup: only the newest speaks
+          if (!iAmLeader()) {
+            reset()
+            return // rival instance took over: stay silent
+          }
           const text = (pending.get(sessionID) ?? "").trim()
           pending.delete(sessionID)
           if (!text || !ttsOn || (settings as any).speakResponses === false) {
@@ -487,12 +564,18 @@ export default Plugin.define({
               const target = ttsOn
               if (!target) {
                 clearTimeout(flushTimer)
+                // shared pid kill: the toggle may run in a rival instance,
+                // but the daemon to free is always the leader's (~2GB)
+                try {
+                  const recorded = Number(readTiny(paths.daemonPid))
+                  if (Number.isInteger(recorded) && recorded > 0) killPid(recorded)
+                } catch {}
                 killDaemon() // free ~1.7GB while off; next speak respawns
                 stopAudio()
                 pending.clear()
                 reset()
               } else {
-                void ensureDaemon() // prewarm so the next speak finds it hot
+                if (iAmLeader()) void ensureDaemon() // prewarm so the next speak finds it hot
               }
               return void updateSettings((d: any) => {
                 d.speakResponses = target
@@ -507,8 +590,9 @@ export default Plugin.define({
     }
 
     // ponytail: prewarm Kokoro while the user works so the first speak
-    // finds a hot daemon instead of paying ~8s import+load on demand
-    void ensureDaemon()
+    // finds a hot daemon instead of paying ~8s import+load on demand.
+    // Leader-only: rival instances must not pile up their own daemons.
+    if (iAmLeader()) void ensureDaemon()
 
     context.ui.slot({
       append: "prompt.footer.status",
